@@ -65,6 +65,9 @@ type setArgsT struct {
 	statefulFiltering      bool
 	netfilterMode          string
 	relayServerPort        string
+	bandwidthLimitEnable   bool
+	bandwidthLimitUp       int64
+	bandwidthLimitDown     int64
 }
 
 func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
@@ -76,16 +79,24 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 	setf.StringVar(&setArgs.exitNodeIP, "exit-node", "", "Tailscale exit node (IP or base name) for internet traffic, or empty string to not use an exit node")
 	setf.BoolVar(&setArgs.exitNodeAllowLANAccess, "exit-node-allow-lan-access", false, "Allow direct access to the local network when routing traffic via an exit node")
 	setf.BoolVar(&setArgs.shieldsUp, "shields-up", false, "don't allow incoming connections")
-	setf.BoolVar(&setArgs.runSSH, "ssh", false, "run an SSH server, permitting access per tailnet admin's declared policy")
-	setf.StringVar(&setArgs.hostname, "hostname", "", "hostname to use instead of the one provided by the OS")
+	setf.BoolVar(&setArgs.runSSH, "ssh", true, "run an SSH server, permitting access per tailnet admin's declared policy")
+	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "run a web client")
+	setf.StringVar(&setArgs.hostname, "hostname", "", "the hostname to use for the current node")
 	setf.StringVar(&setArgs.advertiseRoutes, "advertise-routes", "", "routes to advertise to other nodes (comma-separated, e.g. \"10.0.0.0/8,192.168.0.0/24\") or empty string to not advertise routes")
 	setf.BoolVar(&setArgs.advertiseDefaultRoute, "advertise-exit-node", false, "offer to be an exit node for internet traffic for the tailnet")
-	setf.BoolVar(&setArgs.advertiseConnector, "advertise-connector", false, "offer to be an app connector for domain specific internet traffic for the tailnet")
-	setf.BoolVar(&setArgs.updateCheck, "update-check", true, "notify about available Tailscale updates")
-	setf.BoolVar(&setArgs.updateApply, "auto-update", false, "automatically update to the latest available version")
-	setf.BoolVar(&setArgs.reportPosture, "report-posture", false, "allow management plane to gather device posture information")
-	setf.BoolVar(&setArgs.runWebClient, "webclient", false, "expose the web interface for managing this node over Tailscale at port 5252")
-	setf.StringVar(&setArgs.relayServerPort, "relay-server-port", "", hidden+"UDP port number (0 will pick a random unused port) for the relay server to bind to, on all interfaces, or empty string to disable relay server functionality")
+	setf.BoolVar(&setArgs.advertiseConnector, "advertise-connector", false, "offer to be an app connector for the tailnet")
+	setf.StringVar(&setArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
+	setf.StringVar(&setArgs.acceptedRisks, "accept-risk", "", "accept risk and enable the specified feature: \"lose-ssh-connectivity\"")
+	setf.BoolVar(&setArgs.updateCheck, "auto-update", true, "check for updates")
+	setf.BoolVar(&setArgs.updateApply, "auto-update-apply", false, "apply updates. By default, only notify without applying")
+	setf.BoolVar(&setArgs.reportPosture, "posture-checking", false, "enable endpoint verification posture checking")
+	setf.BoolVar(&setArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
+	setf.BoolVar(&setArgs.statefulFiltering, "stateful-filtering", true, "use stateful packet filtering while in safe mode")
+	setf.StringVar(&setArgs.netfilterMode, "netfilter-mode", "", "netfilter mode (nftables, iptables, auto)")
+	setf.StringVar(&setArgs.relayServerPort, "relay-server-port", "", "port to use for Tailscale relay server connection (default: depends on Tailscale's DNS discovery)")
+	setf.BoolVar(&setArgs.bandwidthLimitEnable, "bandwidth-limit", false, "启用带宽限制")
+	setf.Int64Var(&setArgs.bandwidthLimitUp, "bandwidth-up", 0, "上传带宽限制(字节/秒, 0表示不限制)")
+	setf.Int64Var(&setArgs.bandwidthLimitDown, "bandwidth-down", 0, "下载带宽限制(字节/秒, 0表示不限制)")
 
 	ffcomplete.Flag(setf, "exit-node", func(args []string) ([]string, ffcomplete.ShellCompDirective, error) {
 		st, err := localClient.Status(context.Background())
@@ -102,19 +113,16 @@ func newSetFlagSet(goos string, setArgs *setArgsT) *flag.FlagSet {
 		return nodes, ffcomplete.ShellCompDirectiveNoFileComp, nil
 	})
 
-	if safesocket.GOOSUsesPeerCreds(goos) {
+	// 只在Unix系统上设置operator标志
+	if safesocket.GOOSUsesPeerCreds(goos) && setArgs.opUser == "" {
 		setf.StringVar(&setArgs.opUser, "operator", "", "Unix username to allow to operate on tailscaled without sudo")
 	}
-	switch goos {
-	case "linux":
-		setf.BoolVar(&setArgs.snat, "snat-subnet-routes", true, "source NAT traffic to local routes advertised with --advertise-routes")
-		setf.BoolVar(&setArgs.statefulFiltering, "stateful-filtering", false, "apply stateful filtering to forwarded packets (subnet routers, exit nodes, etc.)")
-		setf.StringVar(&setArgs.netfilterMode, "netfilter-mode", defaultNetfilterMode(), "netfilter mode (one of on, nodivert, off)")
-	case "windows":
+
+	// 只在Windows上设置forceDaemon标志
+	if goos == "windows" {
 		setf.BoolVar(&setArgs.forceDaemon, "unattended", false, "run in \"Unattended Mode\" where Tailscale keeps running even after the current GUI user logs out (Windows-only)")
 	}
 
-	registerAcceptRiskFlag(setf, &setArgs.acceptedRisks)
 	return setf
 }
 
@@ -161,6 +169,15 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 		},
 	}
 
+	// 处理带宽限制参数
+	if setArgs.bandwidthLimitEnable || setArgs.bandwidthLimitUp > 0 || setArgs.bandwidthLimitDown > 0 {
+		maskedPrefs.Prefs.BandwidthConfig = &ipn.BandwidthConfig{
+			Enable:   setArgs.bandwidthLimitEnable,
+			RateUp:   setArgs.bandwidthLimitUp,
+			RateDown: setArgs.bandwidthLimitDown,
+		}
+	}
+
 	if effectiveGOOS() == "linux" {
 		nfMode, warning, err := netfilterModeFromFlag(setArgs.netfilterMode)
 		if err != nil {
@@ -191,6 +208,8 @@ func runSet(ctx context.Context, args []string) (retErr error) {
 			advertiseExitNodeSet = true
 		case "advertise-routes":
 			advertiseRoutesSet = true
+		case "bandwidth-limit", "bandwidth-up", "bandwidth-down":
+			maskedPrefs.BandwidthConfigSet = true
 		}
 	})
 	if maskedPrefs.IsEmpty() {

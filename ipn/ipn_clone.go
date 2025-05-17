@@ -64,6 +64,9 @@ func (src *Prefs) Clone() *Prefs {
 	if dst.RelayServerPort != nil {
 		dst.RelayServerPort = ptr.To(*src.RelayServerPort)
 	}
+	if dst.BandwidthConfig != nil {
+		dst.BandwidthConfig = ptr.To(*src.BandwidthConfig)
+	}
 	dst.Persist = src.Persist.Clone()
 	return dst
 }
@@ -100,6 +103,7 @@ var _PrefsCloneNeedsRegeneration = Prefs(struct {
 	NetfilterKind          string
 	DriveShares            []*drive.Share
 	RelayServerPort        *int
+	BandwidthConfig        *BandwidthConfig
 	AllowSingleHosts       marshalAsTrueInJSON
 	Persist                *persist.Persist
 }{})

@@ -169,3 +169,19 @@ func (e *watchdogEngine) InstallCaptureHook(cb packet.CaptureCallback) {
 func (e *watchdogEngine) PeerByKey(pubKey key.NodePublic) (_ wgint.Peer, ok bool) {
 	return e.wrap.PeerByKey(pubKey)
 }
+
+// SetBandwidthConfig implements the Engine interface.
+func (e *watchdogEngine) SetBandwidthConfig(bandwidthConfig BandwidthConfig) error {
+	return e.watchdogErr("SetBandwidthConfig", func() error {
+		return e.wrap.SetBandwidthConfig(bandwidthConfig)
+	})
+}
+
+// GetBandwidthConfig implements the Engine interface.
+func (e *watchdogEngine) GetBandwidthConfig() BandwidthConfig {
+	var config BandwidthConfig
+	e.watchdog("GetBandwidthConfig", func() {
+		config = e.wrap.GetBandwidthConfig()
+	})
+	return config
+}

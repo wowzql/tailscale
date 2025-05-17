@@ -170,6 +170,10 @@ func (v PrefsView) RelayServerPort() views.ValuePointer[int] {
 	return views.ValuePointerOf(v.ж.RelayServerPort)
 }
 
+func (v PrefsView) BandwidthConfig() views.ValuePointer[BandwidthConfig] {
+	return views.ValuePointerOf(v.ж.BandwidthConfig)
+}
+
 func (v PrefsView) AllowSingleHosts() marshalAsTrueInJSON { return v.ж.AllowSingleHosts }
 func (v PrefsView) Persist() persist.PersistView          { return v.ж.Persist.View() }
 
@@ -205,6 +209,7 @@ var _PrefsViewNeedsRegeneration = Prefs(struct {
 	NetfilterKind          string
 	DriveShares            []*drive.Share
 	RelayServerPort        *int
+	BandwidthConfig        *BandwidthConfig
 	AllowSingleHosts       marshalAsTrueInJSON
 	Persist                *persist.Persist
 }{})

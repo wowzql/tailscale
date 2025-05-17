@@ -58,6 +58,20 @@ type PeerForIP struct {
 	Route netip.Prefix
 }
 
+// BandwidthConfig contains bandwidth limiting configuration.
+type BandwidthConfig struct {
+	// Enable enables the bandwidth limiter.
+	Enable bool
+
+	// RateUp is the maximum upload bandwidth in bytes per second.
+	// Zero means unlimited.
+	RateUp int64
+
+	// RateDown is the maximum download bandwidth in bytes per second.
+	// Zero means unlimited.
+	RateDown int64
+}
+
 // Engine is the Tailscale WireGuard engine interface.
 type Engine interface {
 	// Reconfig reconfigures WireGuard and makes sure it's running.
@@ -130,4 +144,11 @@ type Engine interface {
 	// packets traversing the data path. The hook can be uninstalled by
 	// calling this function with a nil value.
 	InstallCaptureHook(packet.CaptureCallback)
+
+	// SetBandwidthConfig sets the bandwidth limiting configuration.
+	// Rate limits are applied to the total traffic through the engine.
+	SetBandwidthConfig(BandwidthConfig) error
+
+	// GetBandwidthConfig returns the current bandwidth limiting configuration.
+	GetBandwidthConfig() BandwidthConfig
 }

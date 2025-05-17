@@ -66,6 +66,7 @@ func TestPrefsEqual(t *testing.T) {
 		"NetfilterKind",
 		"DriveShares",
 		"RelayServerPort",
+		"BandwidthConfig",
 		"AllowSingleHosts",
 		"Persist",
 	}

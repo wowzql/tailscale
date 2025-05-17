@@ -49,6 +49,36 @@ func IsLoginServerSynonym(val any) bool {
 	return val == "https://login.tailscale.com" || val == "https://controlplane.tailscale.com"
 }
 
+// BandwidthConfig 是带宽限制的配置结构体
+type BandwidthConfig struct {
+	// Enable 启用带宽限制
+	Enable bool `json:",omitempty"`
+	// RateUp 上传带宽限制（字节/秒），0表示不限制
+	RateUp int64 `json:",omitempty"`
+	// RateDown 下载带宽限制（字节/秒），0表示不限制
+	RateDown int64 `json:",omitempty"`
+}
+
+// Pretty 返回BandwidthConfig的格式化文本表示
+func (bc *BandwidthConfig) Pretty() string {
+	if bc == nil || !bc.Enable {
+		return ""
+	}
+
+	var s strings.Builder
+	s.WriteString("bandwidth-limit=on ")
+
+	if bc.RateUp > 0 {
+		s.WriteString(fmt.Sprintf("bandwidth-up=%d ", bc.RateUp))
+	}
+
+	if bc.RateDown > 0 {
+		s.WriteString(fmt.Sprintf("bandwidth-down=%d ", bc.RateDown))
+	}
+
+	return s.String()
+}
+
 // Prefs are the user modifiable settings of the Tailscale node agent.
 // When you add a Pref to this struct, remember to add a corresponding
 // field in MaskedPrefs, and check your field for equality in Prefs.Equals().
@@ -198,7 +228,7 @@ type Prefs struct {
 	// Linux-only.
 	NoSNAT bool
 
-	// NoStatefulFiltering specifies whether to apply stateful filtering when
+	// NoStatefulFiltering specifies whether to filter incoming packets
 	// advertising routes in AdvertiseRoutes. The default is to not apply
 	// stateful filtering.
 	//
@@ -258,6 +288,9 @@ type Prefs struct {
 	// no guarantees are made about its current naming and functionality when
 	// non-nil/enabled.
 	RelayServerPort *int `json:",omitempty"`
+
+	// BandwidthConfig 控制带宽限制配置
+	BandwidthConfig *BandwidthConfig `json:",omitempty"`
 
 	// AllowSingleHosts was a legacy field that was always true
 	// for the past 4.5 years. It controlled whether Tailscale
@@ -351,6 +384,7 @@ type MaskedPrefs struct {
 	NetfilterKindSet          bool                `json:",omitempty"`
 	DriveSharesSet            bool                `json:",omitempty"`
 	RelayServerPortSet        bool                `json:",omitempty"`
+	BandwidthConfigSet        bool                `json:",omitempty"`
 }
 
 // SetsInternal reports whether mp has any of the Internal*Set field bools set
@@ -569,6 +603,9 @@ func (p *Prefs) pretty(goos string) string {
 	}
 	sb.WriteString(p.AutoUpdate.Pretty())
 	sb.WriteString(p.AppConnector.Pretty())
+	if p.BandwidthConfig != nil && p.BandwidthConfig.Enable {
+		sb.WriteString(p.BandwidthConfig.Pretty())
+	}
 	if p.RelayServerPort != nil {
 		fmt.Fprintf(&sb, "relayServerPort=%d ", *p.RelayServerPort)
 	}
@@ -603,6 +640,18 @@ func (p *Prefs) Equals(p2 *Prefs) bool {
 	}
 	if p == nil || p2 == nil {
 		return false
+	}
+
+	// 首先检查BandwidthConfig
+	if (p.BandwidthConfig == nil) != (p2.BandwidthConfig == nil) {
+		return false
+	}
+	if p.BandwidthConfig != nil && p2.BandwidthConfig != nil {
+		if p.BandwidthConfig.Enable != p2.BandwidthConfig.Enable ||
+			p.BandwidthConfig.RateUp != p2.BandwidthConfig.RateUp ||
+			p.BandwidthConfig.RateDown != p2.BandwidthConfig.RateDown {
+			return false
+		}
 	}
 
 	return p.ControlURL == p2.ControlURL &&

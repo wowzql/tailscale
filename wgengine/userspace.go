@@ -39,6 +39,7 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstime/mono"
+	"tailscale.com/tstime/rate"
 	"tailscale.com/types/dnstype"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
@@ -113,6 +114,12 @@ type userspaceEngine struct {
 	netMonUnregister func()              // unsubscribes from changes; used regardless of netMonOwned
 	birdClient       BIRDClient          // or nil
 	controlKnobs     *controlknobs.Knobs // or nil
+
+	// bandwidth limiting fields
+	bwConfig    BandwidthConfig
+	upLimiter   *rate.Limiter // 上传带宽限制器
+	downLimiter *rate.Limiter // 下载带宽限制器
+	bwLock      sync.Mutex    // 保护带宽限制器的锁
 
 	testMaybeReconfigHook func() // for tests; if non-nil, fires if maybeReconfigWireguardLocked called
 
@@ -1647,4 +1654,108 @@ func (e *userspaceEngine) reconfigureVPNIfNecessary() error {
 		return nil
 	}
 	return e.reconfigureVPN()
+}
+
+// SetBandwidthConfig 设置带宽限制配置
+func (e *userspaceEngine) SetBandwidthConfig(cfg BandwidthConfig) error {
+	e.bwLock.Lock()
+	defer e.bwLock.Unlock()
+
+	e.bwConfig = cfg
+
+	// 更新限速器
+	if cfg.Enable {
+		// 为避免限制器完全阻塞，即使设置为0也给予一个非常高的限制
+		upRate := cfg.RateUp
+		if upRate <= 0 {
+			upRate = math.MaxInt64
+		}
+		downRate := cfg.RateDown
+		if downRate <= 0 {
+			downRate = math.MaxInt64
+		}
+
+		// 由于 rate.Limiter 不支持动态更新 limit 和 burst，
+		// 因此在配置更改时需要重新创建限速器
+		e.upLimiter = rate.NewLimiter(rate.Limit(upRate), int(upRate/10)) // burst 设为速率的1/10
+		e.downLimiter = rate.NewLimiter(rate.Limit(downRate), int(downRate/10))
+
+		// 通过注册过滤器来实现带宽限制
+		if e.tundev != nil {
+			// 注册预处理过滤器用于带宽限制
+			e.tundev.PreFilterPacketInboundFromWireGuard = e.filterInboundPacket
+			e.tundev.PreFilterPacketOutboundToWireGuardEngineIntercept = e.filterOutboundPacket
+		}
+
+		e.logf("wgengine: bandwidth limits enabled: up=%d down=%d bytes/sec", upRate, downRate)
+	} else {
+		// 禁用限制，移除过滤器
+		if e.tundev != nil {
+			e.tundev.PreFilterPacketInboundFromWireGuard = nil
+			e.tundev.PreFilterPacketOutboundToWireGuardEngineIntercept = nil
+		}
+		e.logf("wgengine: bandwidth limits disabled")
+	}
+
+	return nil
+}
+
+// GetBandwidthConfig 返回当前带宽限制配置
+func (e *userspaceEngine) GetBandwidthConfig() BandwidthConfig {
+	e.bwLock.Lock()
+	defer e.bwLock.Unlock()
+
+	return e.bwConfig
+}
+
+// filterInboundPacket 处理来自 WireGuard 的入站数据包
+func (e *userspaceEngine) filterInboundPacket(p *packet.Parsed, wrapper *tstun.Wrapper) filter.Response {
+	if !e.bwConfig.Enable {
+		return filter.Accept
+	}
+
+	e.bwLock.Lock()
+	defer e.bwLock.Unlock()
+
+	if e.downLimiter == nil {
+		return filter.Accept
+	}
+
+	// 计算包大小
+	size := len(p.Buffer())
+
+	// 尝试获取令牌，如果不能获取则丢弃包
+	if !e.downLimiter.Allow() {
+		// 丢弃包，实现下载速率限制
+		e.logf("[v2] wgengine: dropping inbound packet due to bandwidth limit (%d bytes)", size)
+		return filter.Drop
+	}
+
+	return filter.Accept
+}
+
+// filterOutboundPacket 处理发往 WireGuard 的出站数据包
+func (e *userspaceEngine) filterOutboundPacket(p *packet.Parsed, wrapper *tstun.Wrapper) filter.Response {
+	if !e.bwConfig.Enable {
+		return filter.Accept
+	}
+
+	e.bwLock.Lock()
+	defer e.bwLock.Unlock()
+
+	if e.upLimiter == nil {
+		return filter.Accept
+	}
+
+	// 计算包大小
+	size := len(p.Buffer())
+
+	// 尝试获取令牌，如果不能获取则丢弃包
+	if !e.upLimiter.Allow() {
+		// 丢弃包，实现上传速率限制
+		e.logf("[v2] wgengine: dropping outbound packet due to bandwidth limit (%d bytes)", size)
+		return filter.Drop
+	}
+
+	return filter.Accept
 }

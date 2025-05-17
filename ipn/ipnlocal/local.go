@@ -3549,6 +3549,18 @@ func (b *LocalBackend) setAtomicValuesFromPrefsLocked(p ipn.PrefsView) {
 	b.sshAtomicBool.Store(p.Valid() && p.RunSSH() && envknob.CanSSHD())
 	b.setExposeRemoteWebClientAtomicBoolLocked(p)
 
+	// 设置带宽限制
+	if p.Valid() && p.BandwidthConfig().Valid() {
+		bc := p.BandwidthConfig().Get()
+		if err := b.e.SetBandwidthConfig(wgengine.BandwidthConfig{
+			Enable:   bc.Enable,
+			RateUp:   bc.RateUp,
+			RateDown: bc.RateDown,
+		}); err != nil {
+			b.logf("设置带宽限制失败: %v", err)
+		}
+	}
+
 	if !p.Valid() {
 		b.containsViaIPFuncAtomic.Store(ipset.FalseContainsIPFunc())
 		b.setTCPPortsIntercepted(nil)
@@ -5100,7 +5112,7 @@ func peerRoutes(logf logger.Logf, peers []wgcfg.Peer, cgnatThreshold int) (route
 			if mm := aip.Masked(); aip != mm {
 				// To avoid a DoS where a peer could cause all
 				// reconfigs to fail by sending a bad prefix, we just
-				// skip, but don't error, on an unmasked route.
+				// skip, but not error, on an unmasked route.
 				logf("advertised route %s from %s has non-address bits set; expected %s", aip, peer.PublicKey.ShortString(), mm)
 				continue
 			}
@@ -5646,7 +5658,7 @@ func (b *LocalBackend) ShouldExposeRemoteWebClient() bool {
 }
 
 // setWebClientAtomicBoolLocked sets webClientAtomicBool based on whether
-// tailcfg.NodeAttrDisableWebClient has been set in the netmap.NetworkMap.
+// tailcfg.NodeAttrDisableWebClient has been set in the netmap.
 //
 // b.mu must be held.
 func (b *LocalBackend) setWebClientAtomicBoolLocked(nm *netmap.NetworkMap) {
